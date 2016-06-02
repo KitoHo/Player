@@ -78,6 +78,8 @@ namespace {
 	bool pan_locked;
 	bool pan_wait;
 	int pan_speed;
+
+	int last_map_id;
 }
 
 void Game_Map::Init() {
@@ -111,6 +113,7 @@ void Game_Map::Init() {
 	location.pan_finish_y = 0;
 	location.pan_current_x = 0;
 	location.pan_current_y = 0;
+	last_map_id = -1;
 }
 
 void Game_Map::Dispose() {
@@ -279,7 +282,14 @@ void Game_Map::PrepareSave() {
 }
 
 void Game_Map::PlayBgm() {
+	if (last_map_id == location.map_id) {
+		// Don't change BGM when the map stayed the same
+		// e.g. when returning from menu or teleporting on same map
+		return;
+	}
+
 	int current_index = GetMapIndex(location.map_id);
+	last_map_id = current_index;
 
 	while (Data::treemap.maps[current_index].music_type == 0 && GetMapIndex(Data::treemap.maps[current_index].parent_map) != current_index) {
 		current_index = GetMapIndex(Data::treemap.maps[current_index].parent_map);
@@ -853,8 +863,19 @@ bool Game_Map::PrepareEncounter() {
 		return false;
 	}
 
-	Game_Battle::SetTerrainId(GetTerrainTag(x, y));
 	Game_Temp::battle_troop_id = encounters[rand() / (RAND_MAX / encounters.size() + 1)];
+	Game_Temp::battle_calling = true;
+
+	SetupBattle();
+
+	return true;
+}
+
+void Game_Map::SetupBattle() {
+	int x = Main_Data::game_player->GetX();
+	int y = Main_Data::game_player->GetY();
+
+	Game_Battle::SetTerrainId(GetTerrainTag(x, y));
 	Game_Temp::battle_escape_mode = -1;
 
 	int current_index = GetMapIndex(location.map_id);
@@ -866,10 +887,6 @@ bool Game_Map::PrepareEncounter() {
 	} else {
 		Game_Temp::battle_background = Data::terrains[Game_Battle::GetTerrainId() - 1].background_name;
 	}
-
-	Game_Temp::battle_calling = true;
-
-	return true;
 }
 
 void Game_Map::ShowBattleAnimation(int animation_id, int target_id, bool global) {

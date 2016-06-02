@@ -50,10 +50,8 @@ void Scene_Title::Start() {
 }
 
 void Scene_Title::Continue() {
-	// Fade out all audio and clear the cache when the game returns to the
+	// Clear the cache when the game returns to the
 	// title screen e.g. by pressing F12
-	Audio().BGM_Fade(800);
-
 	Cache::Clear();
 
 	Player::ResetGameObjects();
@@ -77,11 +75,15 @@ void Scene_Title::Resume() {
 	if (!Data::system.show_title || Player::new_game_flag)
 		return;
 
-	command_window->SetVisible(true);
+	if (command_window) {
+		command_window->SetVisible(true);
+	}
 }
 
 void Scene_Title::Suspend() {
-	command_window->SetVisible(false);
+	if (command_window) {
+		command_window->SetVisible(false);
+	}
 }
 
 void Scene_Title::Update() {
