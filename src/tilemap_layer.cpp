@@ -159,7 +159,7 @@ TilemapLayer::TilemapLayer(int ilayer) :
 	sublayers.push_back(std::make_shared<TilemapSubLayer>(this, -2+layer));
 }
 
-void TilemapLayer::DrawTile(Bitmap& screen, int x, int y, int row, int col, bool autotile) {
+void TilemapLayer::DrawTile(Bitmap& screen, int x, int y, int row, int col) {
 	Bitmap::TileOpacity op = screen.GetTileOpacity(row, col);
 
 	if (!fast_blit && op == Bitmap::Transparent)
@@ -228,7 +228,14 @@ void TilemapLayer::Draw(int z_order) {
 							row = (id - 96) / 6;
 						}
 
-						DrawTile(*chipset, map_draw_x, map_draw_y, row, col, false);
+						// Create tone changed tile
+						if (chipset_tone_tiles.find(id) == chipset_tone_tiles.end()) {
+							Rect r(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+							chipset_effect->ToneBlit(col * TILE_SIZE, row * TILE_SIZE, *chipset, r, tone, Opacity::opaque);
+							chipset_tone_tiles.insert(id);
+						}
+
+						DrawTile(*chipset_effect, map_draw_x, map_draw_y, row, col);
 					} else if (tile.ID >= BLOCK_C && tile.ID < BLOCK_D) {
 						// If Block C
 
@@ -236,20 +243,43 @@ void TilemapLayer::Draw(int z_order) {
 						int col = 3 + (tile.ID - BLOCK_C) / 50;
 						int row = 4 + animation_step_c;
 
+						// Create tone changed tile
+						if (chipset_tone_tiles.find(tile.ID + (animation_step_c << 12)) == chipset_tone_tiles.end()) {
+							Rect r(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+							chipset_effect->ToneBlit(col * TILE_SIZE, row * TILE_SIZE, *chipset, r, tone, Opacity::opaque);
+							chipset_tone_tiles.insert(tile.ID + (animation_step_c << 12));
+						}
+
 						// Draw the tile
-						DrawTile(*chipset, map_draw_x, map_draw_y, row, col, false);
+						DrawTile(*chipset_effect, map_draw_x, map_draw_y, row, col);
 					} else if (tile.ID < BLOCK_C) {
 						// If Blocks A1, A2, B
 
 						// Draw the tile from autotile cache
 						TileXY pos = GetCachedAutotileAB(tile.ID, animation_step_ab);
-						DrawTile(*autotiles_ab_screen, map_draw_x, map_draw_y, pos.y, pos.x, true);
+
+						// Create tone changed tile
+						if (autotiles_ab_screen_tone_tiles.find(tile.ID + (animation_step_ab << 12)) == autotiles_ab_screen_tone_tiles.end()) {
+							Rect r(pos.x * TILE_SIZE, pos.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+							autotiles_ab_screen_effect->ToneBlit(pos.x * TILE_SIZE, pos.y * TILE_SIZE, *autotiles_ab_screen, r, tone, Opacity::opaque);
+							autotiles_ab_screen_tone_tiles.insert(tile.ID + (animation_step_ab << 12));
+						}
+
+						DrawTile(*autotiles_ab_screen_effect, map_draw_x, map_draw_y, pos.y, pos.x);
 					} else {
 						// If blocks D1-D12
 
 						// Draw the tile from autotile cache
 						TileXY pos = GetCachedAutotileD(tile.ID);
-						DrawTile(*autotiles_d_screen, map_draw_x, map_draw_y, pos.y, pos.x, true);
+
+						// Create tone changed tile
+						if (autotiles_d_screen_tone_tiles.find(tile.ID) == autotiles_d_screen_tone_tiles.end()) {
+							Rect r(pos.x * TILE_SIZE, pos.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+							autotiles_d_screen_effect->ToneBlit(pos.x * TILE_SIZE, pos.y * TILE_SIZE, *autotiles_d_screen, r, tone, Opacity::opaque);
+							autotiles_d_screen_tone_tiles.insert(tile.ID);
+						}
+
+						DrawTile(*autotiles_d_screen_effect, map_draw_x, map_draw_y, pos.y, pos.x);
 					}
 				} else {
 					// If upper layer
@@ -270,8 +300,15 @@ void TilemapLayer::Draw(int z_order) {
 							row = (id - 48) / 6;
 						}
 
+						// Create tone changed tile
+						if (chipset_tone_tiles.find(id) == chipset_tone_tiles.end()) {
+							Rect r(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+							chipset_effect->ToneBlit(col * TILE_SIZE, row * TILE_SIZE, *chipset, r, tone, Opacity::opaque);
+							chipset_tone_tiles.insert(id);
+						}
+
 						// Draw the tile
-						DrawTile(*chipset, map_draw_x, map_draw_y, row, col, false);
+						DrawTile(*chipset_effect, map_draw_x, map_draw_y, row, col);
 					}
 				}
 			}
@@ -436,8 +473,10 @@ void TilemapLayer::GenerateAutotileD(short ID) {
 	// Calculate the D block combination
 	short subtile = ID - 4000 - block * 50;
 
-	if (block >= 12 || subtile >= 50 || block < 0 || subtile < 0)
-		Output::Error("Index out of range: %d %d", block, subtile);
+	if (block >= 12 || subtile >= 50 || block < 0 || subtile < 0) {
+		Output::Warning("Tilemap index out of range: %d %d", block, subtile);
+		return;
+	}
 
 	if (autotiles_d[block][subtile].valid)
 		return;
@@ -492,7 +531,6 @@ void TilemapLayer::GenerateAutotileD(short ID) {
 	autotiles_d_map[quarters_hash] = tile_xy;
 	autotiles_d[block][subtile] = tile_xy;
 }
-
 
 BitmapRef TilemapLayer::GenerateAutotiles(int count, const std::map<uint32_t, TileXY>& map) {
 	int rows = (count + TILES_PER_ROW - 1) / TILES_PER_ROW;
@@ -561,9 +599,18 @@ BitmapRef const& TilemapLayer::GetChipset() const {
 
 void TilemapLayer::SetChipset(BitmapRef const& nchipset) {
 	chipset = nchipset;
-	if (autotiles_ab_next != 0 && autotiles_d_screen != 0 && layer == 0) {
+	chipset_effect = Bitmap::Create(chipset->width(), chipset->height());
+	chipset_tone_tiles.clear();
+
+	if (autotiles_ab_next != 0 && autotiles_d_screen != nullptr && layer == 0) {
 		autotiles_ab_screen = GenerateAutotiles(autotiles_ab_next, autotiles_ab_map);
 		autotiles_d_screen = GenerateAutotiles(autotiles_d_next, autotiles_d_map);
+
+		autotiles_ab_screen_effect = Bitmap::Create(autotiles_ab_screen->width(), autotiles_ab_screen->height());
+		autotiles_d_screen_effect = Bitmap::Create(autotiles_d_screen->width(), autotiles_d_screen->height());
+
+		autotiles_ab_screen_tone_tiles.clear();
+		autotiles_d_screen_tone_tiles.clear();
 	}
 }
 
@@ -600,6 +647,12 @@ void TilemapLayer::SetMapData(const std::vector<short>& nmap_data) {
 		}
 		autotiles_ab_screen = GenerateAutotiles(autotiles_ab_next, autotiles_ab_map);
 		autotiles_d_screen = GenerateAutotiles(autotiles_d_next, autotiles_d_map);
+
+		autotiles_ab_screen_effect = Bitmap::Create(autotiles_ab_screen->width(), autotiles_ab_screen->height());
+		autotiles_d_screen_effect = Bitmap::Create(autotiles_d_screen->width(), autotiles_d_screen->height());
+
+		autotiles_ab_screen_tone_tiles.clear();
+		autotiles_d_screen_tone_tiles.clear();
 	}
 
 	map_data = nmap_data;
@@ -725,4 +778,25 @@ int TilemapSubLayer::GetZ() const {
 
 DrawableType TilemapSubLayer::GetType() const {
 	return type;
+}
+
+void TilemapLayer::SetTone(Tone tone) {
+	if (tone == this->tone) {
+		return;
+	}
+
+	this->tone = tone;
+
+	if (autotiles_d_screen_effect) {
+		autotiles_d_screen_effect->Clear();
+		autotiles_d_screen_tone_tiles.clear();
+	}
+	if (autotiles_ab_screen_effect) {
+		autotiles_ab_screen_effect->Clear();
+		autotiles_ab_screen_tone_tiles.clear();
+	}
+	if (chipset_effect) {
+		chipset_effect->Clear();
+		chipset_tone_tiles.clear();
+	}
 }

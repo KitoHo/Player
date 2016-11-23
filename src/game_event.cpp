@@ -33,15 +33,8 @@
 #include <cstdlib>
 
 Game_Event::Game_Event(int map_id, const RPG::Event& event) :
-	starting(false),
-	running(false),
-	halting(false),
-	trigger(-1),
 	event(event),
-	page(NULL),
 	from_save(false) {
-
-	ID = event.ID;
 
 	SetMapId(map_id);
 	MoveTo(event.x, event.y);
@@ -50,16 +43,12 @@ Game_Event::Game_Event(int map_id, const RPG::Event& event) :
 
 Game_Event::Game_Event(int /* map_id */, const RPG::Event& event, const RPG::SaveMapEvent& data) :
 	// FIXME unused int parameter
-	starting(false),
-	running(false),
-	halting(false),
+	data(data),
 	event(event),
-	page(NULL),
 	from_save(true) {
 
-	ID = data.ID;
+	this->event.ID = data.ID;
 
-	this->data = data;
 	MoveTo(data.position_x, data.position_y);
 
 	if (!data.event_data.commands.empty()) {
@@ -246,6 +235,8 @@ void Game_Event::ClearStarting() {
 
 void Game_Event::Setup(RPG::EventPage* new_page) {
 	bool from_null = page == NULL;
+
+	RPG::EventPage* old_page = page;
 	page = new_page;
 
 	// Free resources if needed
@@ -286,13 +277,13 @@ void Game_Event::Setup(RPG::EventPage* new_page) {
 	original_move_route = page->move_route;
 	SetOriginalMoveRouteIndex(0);
 
-	bool last_direction_fixed = IsDirectionFixed() || IsFacingLocked();
+	bool last_direction_fixed = old_page && old_page->character_direction != GetSpriteDirection();
 	animation_type = page->animation_type;
 
-	if (from_null || !(last_direction_fixed || IsMoving()) || IsDirectionFixed())
+	if (from_null || !(last_direction_fixed || IsMoving()) || IsDirectionFixed()) {
 		SetSpriteDirection(page->character_direction);
-	if (!IsMoving())
 		SetDirection(page->character_direction);
+	}
 
 	SetOpacity(page->translucent ? 160 : 255);
 	SetLayer(page->layer);
@@ -450,7 +441,11 @@ bool Game_Event::AreConditionsMet(const RPG::EventPage& page) {
 }
 
 int Game_Event::GetId() const {
-	return ID;
+	return event.ID;
+}
+
+std::string Game_Event::GetName() const {
+	return event.name;
 }
 
 bool Game_Event::GetStarting() const {
@@ -476,7 +471,7 @@ bool Game_Event::GetActive() const {
 
 void Game_Event::Start(bool by_decision_key) {
 	// RGSS scripts consider list empty if size <= 1. Why?
-	if (list.empty() || !data.active || running)
+	if (list.empty() || !data.active)
 		return;
 
 	starting = true;
@@ -532,8 +527,7 @@ bool Game_Event::CheckEventTriggerTouch(int x, int y) {
 void Game_Event::UpdateSelfMovement() {
 	if (running)
 		return;
-	if (!Game_Message::GetContinueEvents() &&
-		(Game_Map::GetInterpreter().IsRunning() || Game_Map::GetInterpreter().HasRunned()))
+	if (!Game_Message::GetContinueEvents() && Game_Map::GetInterpreter().IsRunning())
 		return;
 	if (!IsStopping())
 		return;
@@ -578,7 +572,8 @@ void Game_Event::MoveTypeRandom() {
 	}
 	if (move_failed && !starting) {
 		SetDirection(last_direction);
-		SetSpriteDirection(last_direction);
+		if (!(IsDirectionFixed() || IsFacingLocked()))
+			SetSpriteDirection(last_direction);
 	} else {
 		max_stop_count = max_stop_count / 5 * (rand() % 4 + 3);
 	}
@@ -627,7 +622,8 @@ void Game_Event::MoveTypeTowardsPlayer() {
 			stop_count = 0;
 		} else {
 			SetDirection(last_direction);
-			SetSpriteDirection(last_direction);
+			if (!(IsDirectionFixed() || IsFacingLocked()))
+				SetSpriteDirection(last_direction);
 		}
 	}
 }
@@ -657,7 +653,8 @@ void Game_Event::MoveTypeAwayFromPlayer() {
 			stop_count = 0;
 		} else {
 			SetDirection(last_direction);
-			SetSpriteDirection(last_direction);
+			if (!(IsDirectionFixed() || IsFacingLocked()))
+				SetSpriteDirection(last_direction);
 		}
 	}
 }
@@ -666,6 +663,8 @@ void Game_Event::Update() {
 	if (!data.active || page == NULL) {
 		return;
 	}
+
+	Game_Character::UpdateSprite();
 
 	if (starting && !Game_Map::GetInterpreter().IsRunning()) {
 		Game_Map::GetInterpreter().SetupStartingEvent(this);
@@ -680,9 +679,11 @@ void Game_Event::Update() {
 }
 
 void Game_Event::UpdateParallel() {
-	if (!data.active || page == NULL) {
+	if (!data.active || page == NULL || updating) {
 		return;
 	}
+
+	updating = true;
 
 	if (interpreter) {
 		if (!interpreter->IsRunning()) {
@@ -690,12 +691,12 @@ void Game_Event::UpdateParallel() {
 		}
 		interpreter->Update();
 	}
-
 	Game_Character::Update();
+	updating = false;
 }
 
 const RPG::EventPage* Game_Event::GetPage(int page) const {
-	if (page <= 0 || page - 1 >= event.pages.size()) {
+	if (page <= 0 || page - 1 >= static_cast<int>(event.pages.size())) {
 		return nullptr;
 	}
 	return &event.pages[page - 1];
@@ -705,7 +706,7 @@ const RPG::SaveMapEvent& Game_Event::GetSaveData() {
 	if (interpreter) {
 		data.event_data.commands = static_cast<Game_Interpreter_Map*>(interpreter.get())->GetSaveData();
 	}
-	data.ID = ID;
+	data.ID = event.ID;
 
 	return data;
 }

@@ -65,9 +65,11 @@
 #  include "audio_al.h"
 #endif
 
+#ifdef SUPPORT_AUDIO
 AudioInterface& SdlUi::GetAudio() {
 	return *audio_;
 }
+#endif
 
 // SDL 1.2 compatibility
 #if SDL_MAJOR_VERSION==1
@@ -171,21 +173,21 @@ SdlUi::SdlUi(long width, long height, bool fs_flag) :
 #endif
 
 #ifdef HAVE_SDL_MIXER
-	audio_.reset(new SdlAudio());
+	if (!Player::no_audio_flag) {
+		audio_.reset(new SdlAudio());
+		return;
+	}
 #elif defined(HAVE_OPENAL)
-	audio_.reset(new ALAudio());
-#else
-	audio_.reset(new EmptyAudio());
+	if (!Player::no_audio_flag) {
+		audio_.reset(new ALAudio());
+		return;
+	}
 #endif
+	audio_.reset(new EmptyAudio());
 }
 
 SdlUi::~SdlUi() {
-#if defined(GPH)
-	chdir("/usr/gp2x");
-	execl("./gp2xmenu", "./gp2xmenu", NULL);
-#else
 	SDL_Quit();
-#endif
 }
 
 uint32_t SdlUi::GetTicks() const {

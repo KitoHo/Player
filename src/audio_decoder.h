@@ -15,8 +15,8 @@
  * along with EasyRPG Player. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef _EASYRPG_AUDIO_DECODER_H_
-#define _EASYRPG_AUDIO_DECODER_H_
+#ifndef EASYRPG_AUDIO_DECODER_H
+#define EASYRPG_AUDIO_DECODER_H
 
 // Headers
 #include <cstdio>
@@ -173,6 +173,14 @@ public:
 	int GetLoopCount() const;
 
 	/**
+	 * Gets the status of the newly created audio decoder.
+	 * Used to make sure the underlying library is properly initialized.
+	 *
+	 * @return true if initializing was succesful, false otherwise
+	 */
+	virtual bool WasInited() const;
+
+	/**
 	 * Provides an error message when Open or a Decode function fail.
 	 *
 	 * @return Human readable error message
@@ -264,14 +272,14 @@ public:
 	 *
 	 * @return Position in the stream
 	 */
-	virtual size_t Tell();
+	virtual size_t Tell() const;
 
 	/**
 	 * Returns amount of executed ticks. Only useful for MIDI format.
 	 *
 	 * @return Amount of MIDI ticks.
 	 */
-	virtual int GetTicks();
+	virtual int GetTicks() const;
 
 	/**
 	 * Returns the amount of bytes per sample.
@@ -301,6 +309,8 @@ private:
 
 	bool looping = false;
 	int loop_count = 0;
+
+	int Decode(uint8_t* buffer, int size, int recursion_depth);
 
 	std::vector<uint8_t> mono_buffer;
 };

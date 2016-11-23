@@ -44,11 +44,11 @@ static void streamThread(void* arg){
 			termStream = false;
 			threadExit(0);
 		}
-		
-		if (BGM == NULL) continue; // No BGM detected
-		else if (BGM->starttick == 0) continue; // BGM not started
-		else if (!BGM->isPlaying) continue; // BGM paused
-		LightLock_Lock(&BGM_Mutex);
+		LightLock_Lock(&BGM_Mutex);		
+		if (BGM == NULL || BGM->starttick == 0 || !BGM->isPlaying) { 			
+			LightLock_Unlock(&BGM_Mutex);
+			continue;
+		}
 		
 		// Calculating delta in milliseconds
 		u64 delta = (osGetTime() - BGM->starttick);
@@ -183,11 +183,7 @@ CtrAudio::~CtrAudio() {
 	#endif
 }
 
-void CtrAudio::BGM_OnPlayedOnce() {
-	// Deprecated
-}
-
-void CtrAudio::BGM_Play(std::string const& file, int volume, int /* pitch */, int fadein) {
+void CtrAudio::BGM_Play(std::string const& file, int volume, int pitch, int fadein) {
 	
 	// If a BGM is currently playing, we kill it
 	BGM_Stop();
@@ -199,17 +195,10 @@ void CtrAudio::BGM_Play(std::string const& file, int volume, int /* pitch */, in
 		BGM = NULL;
 		LightLock_Unlock(&BGM_Mutex);
 	}
-	
-	// Searching for the file
-	std::string const path = FileFinder::FindMusic(file);
-	if (path.empty()) {
-		Output::Debug("Music not found: %s", file.c_str());
-		return;
-	}
-	
+
 	// Opening and decoding the file
 	DecodedMusic* myFile = (DecodedMusic*)malloc(sizeof(DecodedMusic));
-	int res = DecodeMusic(path, myFile);
+	int res = DecodeMusic(file, myFile);
 	if (res < 0){
 		free(myFile);
 		return;
@@ -255,13 +244,18 @@ void CtrAudio::BGM_Play(std::string const& file, int volume, int /* pitch */, in
 		createDspBlock(&dspSounds[SOUND_CHANNELS], BGM->bytepersample, BGM->audiobuf_size, true, (u32*)BGM->audiobuf);
 		ndspChnWaveBufAdd(SOUND_CHANNELS, &dspSounds[SOUND_CHANNELS]);		
 	}
+	BGM->pitch = pitch;
 	BGM->isPlaying = true;
 	BGM->starttick = osGetTime();
 	
 }
 
 void CtrAudio::BGM_Pause() {
-	if (BGM == NULL) return;
+	LightLock_Lock(&BGM_Mutex);
+	if (BGM == NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		return;
+	}
 	if (BGM->isPlaying){
 		if (!Player::use_dsp){
 			CSND_SetPlayState(0x1E, 0);
@@ -271,10 +265,15 @@ void CtrAudio::BGM_Pause() {
 		BGM->isPlaying = false;
 		BGM->starttick = osGetTime()-BGM->starttick; // Save current delta
 	}
+	LightLock_Unlock(&BGM_Mutex);
 }
 
 void CtrAudio::BGM_Resume() {
-	if (BGM == NULL) return;
+	LightLock_Lock(&BGM_Mutex);
+	if (BGM == NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		return;
+	}
 	if (!BGM->isPlaying){
 		if (!Player::use_dsp){
 			if (BGM->isStereo) CSND_SetPlayState(0x1E, 1);
@@ -284,29 +283,50 @@ void CtrAudio::BGM_Resume() {
 		BGM->isPlaying = true;
 		BGM->starttick = osGetTime()-BGM->starttick; // Restore starttick
 	}
+	LightLock_Unlock(&BGM_Mutex);
 }
 
 void CtrAudio::BGM_Stop() {
-	if (BGM == NULL) return;
+	LightLock_Lock(&BGM_Mutex);
+	if (BGM == NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		return;
+	}
 	if (!Player::use_dsp){
 		CSND_SetPlayState(0x1E, 0);
 		CSND_SetPlayState(0x1F, 0);
 		CSND_UpdateInfo(true);
 	}else ndspChnWaveBufClear(SOUND_CHANNELS);
 	BGM->isPlaying = false;
+	LightLock_Unlock(&BGM_Mutex);
 }
 
-bool CtrAudio::BGM_PlayedOnce() {
-	if (BGM == NULL) return false;
-	return (BGM->block_idx >= BGM->eof_idx);
+bool CtrAudio::BGM_PlayedOnce() const {
+	LightLock_Lock(&BGM_Mutex);
+	if (BGM == NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		return false;
+	}
+	bool res = (BGM->block_idx >= BGM->eof_idx);
+	LightLock_Unlock(&BGM_Mutex);
+	return res;
 }
 
-unsigned CtrAudio::BGM_GetTicks() {
+bool CtrAudio::BGM_IsPlaying() const {
+	return BGM != NULL;
+}
+
+unsigned CtrAudio::BGM_GetTicks() const {
+	// Todo
 	return 0;
 }
 
 void CtrAudio::BGM_Volume(int volume) {
-	if (BGM == NULL) return;
+	LightLock_Lock(&BGM_Mutex);
+	if (BGM == NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		return;
+	}
 	float vol = volume / 100.0;
 	if (Player::use_dsp){
 		if (BGM->isStereo){
@@ -318,14 +338,21 @@ void CtrAudio::BGM_Volume(int volume) {
 		float vol_table[12] = {vol,vol,vol,vol};
 		ndspChnSetMix(SOUND_CHANNELS, vol_table);
 	}
+	LightLock_Unlock(&BGM_Mutex);
 }
 
 void CtrAudio::BGM_Pitch(int pitch) {
-	if (BGM == NULL) return;
 	LightLock_Lock(&BGM_Mutex);
-	
+	if (BGM == NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		return;
+	}	
 	// Pausing playback to not broke audio streaming
-	if (BGM->handle != NULL) BGM_Pause();
+	if (BGM->handle != NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		BGM_Pause();
+		LightLock_Lock(&BGM_Mutex);
+	}
 	if (!Player::use_dsp) svcSleepThread(100000000); // Temp patch for csnd:SND
 	
 	// Calculating new samplerate
@@ -348,53 +375,26 @@ void CtrAudio::BGM_Pitch(int pitch) {
 		CSND_UpdateInfo(true);
 	}
 	
+	BGM->pitch = pitch;
+	
 	// Resuming playback
-	if (BGM->handle != NULL) BGM_Resume();
+	if (BGM->handle != NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		BGM_Resume();
+		LightLock_Lock(&BGM_Mutex);
+	}
 	
 	LightLock_Unlock(&BGM_Mutex);
-	
 }
 
 void CtrAudio::BGM_Fade(int fade) {
-	if (BGM == NULL) return;
+	LightLock_Lock(&BGM_Mutex);
+	if (BGM == NULL) {
+		LightLock_Unlock(&BGM_Mutex);
+		return;
+	}
 	BGM->fade_val = -fade;
-}
-
-void CtrAudio::BGS_Play(std::string const& file, int volume, int /* pitch */, int fadein) {
-	// Deprecated
-}
-
-void CtrAudio::BGS_Pause() {
-	// Deprecated
-}
-
-void CtrAudio::BGS_Resume() {
-	// Deprecated
-}
-
-void CtrAudio::BGS_Stop() {
-	// Deprecated
-}
-
-void CtrAudio::BGS_Fade(int fade) {
-	// Deprecated
-}
-
-int CtrAudio::BGS_GetChannel() const {
-	// Deprecated
-	return 1;
-}
-
-void CtrAudio::ME_Play(std::string const& file, int volume, int /* pitch */, int fadein) {
-	// Deprecated
-}
-
-void CtrAudio::ME_Stop() {
-	// Deprecated
-}
-
-void CtrAudio::ME_Fade(int fade) {
-	// Deprecated
+	LightLock_Unlock(&BGM_Mutex);
 }
 
 void CtrAudio::SE_Play(std::string const& file, int volume, int /* pitch */) {
@@ -432,20 +432,13 @@ void CtrAudio::SE_Play(std::string const& file, int volume, int /* pitch */) {
 	int cacheIdx = lookCache(file.c_str());
 	if (cacheIdx < 0){
 	#endif
-	
-		// Searching for the file
-		std::string const path = FileFinder::FindSound(file);
-		if (path.empty()) {
-			Output::Debug("Sound not found: %s", file.c_str());
-			return;
-		}
-	
-		// Opening and decoding the file
-		int res = DecodeSound(path, &myFile);
-		if (res < 0) return;
-		#ifdef USE_CACHE
-		else sprintf(soundtable[res],"%s",file.c_str());
-		#endif
+
+	// Opening and decoding the file
+	int res = DecodeSound(file, &myFile);
+	if (res < 0) return;
+	#ifdef USE_CACHE
+	else sprintf(soundtable[res],"%s",file.c_str());
+	#endif
 		
 	#ifdef USE_CACHE
 	}else myFile = decodedtable[cacheIdx];

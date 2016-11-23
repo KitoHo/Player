@@ -131,6 +131,21 @@ namespace Game_Map {
 	bool IsValid(int x, int y);
 
 	/**
+	 * Clears the way for a move by self from (x,y) in the direction d. Any events
+	 * that block the way are updated early (by UpdateParallel) to give them a
+	 * chance to move out of the way.
+	 *
+	 * Returns true if everything is clear to make the move.
+	 *
+	 * @param x tile x.
+	 * @param y tile y.
+	 * @param d direction
+	 * @param self Character to move.
+	 * @return whether is passable.
+	 */
+	bool MakeWay(int x, int y, int d, const Game_Character& self);
+
+	/**
 	 * Gets if a tile coordinate is passable in a direction.
 	 *
 	 * @param x tile x.
@@ -152,15 +167,15 @@ namespace Game_Map {
 	 */
 	bool IsPassableVehicle(int x, int y, Game_Vehicle::Type vehicle_type);
 
-    /**
-     * Gets if a tile coordinate can be jumped to.
-     *
-     * @param x tile x.
-     * @param y tile y.
-     * @param self_event Current character attemping to jump.
-     * @return whether is posible to jump.
-     */
-    bool IsLandable(int x, int y, const Game_Character* self_event = NULL);
+	/**
+	 * Gets if a tile coordinate can be jumped to.
+	 *
+	 * @param x tile x.
+	 * @param y tile y.
+	 * @param self_event Current character attemping to jump.
+	 * @return whether is posible to jump.
+	 */
+	bool IsLandable(int x, int y, const Game_Character* self_event = NULL);
 
 	/**
 	 * Gets the bush depth at a certain tile.
@@ -527,6 +542,14 @@ namespace Game_Map {
 	int GetMapIndex(int id);
 
 	/**
+	 * Gets the map name from MapInfo vector using map ID.
+	 *
+	 * @param id map ID.
+	 * @return map name from MapInfo vector.
+	 */
+	std::string GetMapName(int id);
+
+	/**
 	 * Sets the chipset.
 	 *
 	 * @param id new chipset ID.
@@ -575,6 +598,23 @@ namespace Game_Map {
 	int GetParallaxX();
 	int GetParallaxY();
 	const std::string& GetParallaxName();
+
+	/**
+	 * Gets if pending teleportations will be ignored.
+	 *
+	 * @return true: teleport ignored, false: teleport processed normally
+	 */
+	bool IsTeleportDelayed();
+
+	/**
+	 * Enables/Disables the processing of teleports.
+	 * This is used by Show/EraseScreen in Parallel processes to prevent
+	 * too early execution of teleports (Show/EraseScreen don't yield the
+	 * interpreter in RPG_RT).
+	 *
+	 * @param delay enable/disable delay
+	 */
+	void SetTeleportDelayed(bool delay);
 
 	FileRequestAsync* RequestMap(int map_id);
 }

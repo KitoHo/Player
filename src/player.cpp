@@ -37,9 +37,10 @@
 #  include <fat.h>
 #elif defined(EMSCRIPTEN)
 #  include <emscripten.h>
+#elif defined(PSP2)
+#  include <psp2/kernel/processmgr.h>
 #elif defined(_3DS)
 #  include <3ds.h>
-#  include <khax.h>
 #endif
 
 #include "async_handler.h"
@@ -116,10 +117,7 @@ namespace {
 }
 
 void Player::Init(int argc, char *argv[]) {
-	static bool init = false;
 	frames = 0;
-
-	if (init) return;
 
 	// Display a nice version string
 	std::stringstream header;
@@ -145,10 +143,8 @@ void Player::Init(int argc, char *argv[]) {
 	gfxInitDefault();
 	consoleInit(GFX_BOTTOM, NULL);
 
-	aptOpenSession();
 	APT_SetAppCpuTimeLimit(30);
-	aptCloseSession();
-	if (osGetKernelVersion() <  SYSTEM_VERSION(2, 48, 3)) khaxInit(); // Executing libkhax just to be sure...
+
 	consoleClear();
 
 	// Check if we already have access to csnd:SND, if not, we will perform a kernel privilege escalation
@@ -183,7 +179,7 @@ void Player::Init(int argc, char *argv[]) {
 	hidInit();
 
 	// Enable 804 Mhz mode if on N3DS
-	u8 isN3DS;
+	bool isN3DS;
 	APT_CheckNew3DS(&isN3DS);
 	if (isN3DS) {
 		osSetSpeedupEnable(true);
@@ -195,6 +191,7 @@ void Player::Init(int argc, char *argv[]) {
 #endif
 
 	srand(time(NULL));
+	Utils::SeedRandomNumberGenerator(time(NULL));
 
 	ParseCommandLine(argc, argv);
 
@@ -229,8 +226,6 @@ void Player::Init(int argc, char *argv[]) {
 			 !window_flag,
 			 RUN_ZOOM);
 	}
-
-	init = true;
 }
 
 void Player::Run() {
@@ -374,10 +369,9 @@ void Player::Exit() {
 	FileFinder::Quit();
 	Output::Quit();
 	DisplayUi.reset();
-	
-#ifdef __ANDROID__
-	// Workaround Segfault under Android
-	exit(0);
+
+#ifdef PSP2
+	sceKernelExitProcess(0);
 #endif
 
 #ifdef _3DS
@@ -387,7 +381,6 @@ void Player::Exit() {
 	romfsExit();
 	fsExit();
 #endif
-
 }
 
 void Player::ParseCommandLine(int argc, char *argv[]) {
@@ -523,6 +516,7 @@ void Player::ParseCommandLine(int argc, char *argv[]) {
 				return;
 			}
 			srand(atoi((*it).c_str()));
+			Utils::SeedRandomNumberGenerator(atoi((*it).c_str()));
 		}
 		else if (*it == "--start-map-id") {
 			++it;
@@ -554,11 +548,17 @@ void Player::ParseCommandLine(int argc, char *argv[]) {
 			if (*it == "rpg2k" || *it == "2000") {
 				engine = EngineRpg2k;
 			}
+			else if (*it == "rpg2kv150" || *it == "2000v150") {
+				engine = EngineRpg2k | EngineMajorUpdated;
+			}
 			else if (*it == "rpg2k3" || *it == "2003") {
 				engine = EngineRpg2k3;
 			}
+			else if (*it == "rpg2k3v105" || *it == "2003v105") {
+				engine = EngineRpg2k3 | EngineMajorUpdated;
+			}
 			else if (*it == "rpg2k3e") {
-				engine = EngineRpg2k3 | EngineRpg2k3E;
+				engine = EngineRpg2k3 | EngineMajorUpdated | EngineRpg2k3E;
 			}
 		}
 		else if (*it == "--encoding") {
@@ -640,18 +640,35 @@ void Player::CreateGameObjects() {
 			engine = EngineRpg2k3;
 
 			if (FileFinder::FindDefault("ultimate_rt_eb.dll").empty()) {
-				Output::Debug("Using RPG2k3 Interpreter");
-			}
-			else {
+				// Heuristic: Detect if game was converted from 2000 to 2003 and
+				// no typical 2003 feature was used at all (breaks .flow e.g.)
+				if (Data::classes.size() == 1 &&
+					Data::classes[0].name.empty() &&
+					Data::system.menu_commands.empty() &&
+					Data::system.system2_name.empty() &&
+					Data::battleranimations.size() == 1 &&
+					Data::battleranimations[0].name.empty()) {
+					engine = EngineRpg2k;
+					Output::Debug("Using RPG2k Interpreter (heuristic)");
+				} else {
+					Output::Debug("Using RPG2k3 Interpreter");
+				}
+			} else {
 				engine |= EngineRpg2k3E;
 				Output::Debug("Using RPG2k3 (English release, v1.11) Interpreter");
 			}
-		}
-		else {
+		} else {
 			engine = EngineRpg2k;
 			Output::Debug("Using RPG2k Interpreter");
 		}
+		if (FileFinder::IsMajorUpdatedTree()) {
+			engine |= EngineMajorUpdated;
+			Output::Debug("RPG2k >= v1.50 / RPG2k3 >= v1.05 detected");
+		} else {
+			Output::Debug("RPG2k < v1.50 / RPG2k3 < v1.05 detected");
+		}
 	}
+	Output::Debug("Engine configured as: 2k=%d 2k3=%d 2k3Legacy=%d MajorUpdated=%d 2k3E=%d", Player::IsRPG2k(), Player::IsRPG2k3(), Player::IsRPG2k3Legacy(), Player::IsMajorUpdatedVersion(), Player::IsRPG2k3E());
 
 	if (!no_rtp_flag) {
 		FileFinder::InitRtpPaths();
@@ -809,8 +826,43 @@ std::string Player::GetEncoding() {
 	}
 
 	if (encoding.empty() || encoding == "auto") {
+		encoding = "";
+
 		std::string ldb = FileFinder::FindDefault(DATABASE_NAME);
-		encoding = ReaderUtil::DetectEncoding(ldb);
+		std::vector<std::string> encodings = ReaderUtil::DetectEncodings(ldb);
+
+#ifndef EMSCRIPTEN
+		for (std::string& enc : encodings) {
+			// Heuristic: Check if encoded title and system name matches the one on the filesystem
+			// When yes is a good encoding. Otherwise try the next ones.
+
+			escape_symbol = ReaderUtil::Recode("\\", enc);
+			if (escape_symbol.empty()) {
+				// Bad encoding
+				Output::Debug("Bad encoding: %s. Trying next.", enc.c_str());
+				continue;
+			}
+
+			if ((Data::system.title_name.empty() ||
+					!FileFinder::FindImage("Title", ReaderUtil::Recode(Data::system.title_name, enc)).empty()) &&
+				(Data::system.system_name.empty() ||
+					!FileFinder::FindImage("System", ReaderUtil::Recode(Data::system.system_name, enc)).empty())) {
+				// Looks like a good encoding
+				encoding = enc;
+				break;
+			} else {
+				Output::Debug("Detected encoding: %s. Files not found. Trying next.", enc.c_str());
+			}
+		}
+#endif
+
+		if (!encodings.empty() && encoding.empty()) {
+			// No encoding found that matches the files, maybe RTP missing.
+			// Use the first one instead
+			encoding = encodings[0];
+		}
+
+		escape_symbol = "";
 
 		if (!encoding.empty()) {
 			Output::Debug("Detected encoding: %s", encoding.c_str());
@@ -819,7 +871,6 @@ std::string Player::GetEncoding() {
 			encoding = ReaderUtil::GetLocaleEncoding();
 		}
 	}
-
 
 	return encoding;
 }
@@ -848,9 +899,11 @@ Options:
                            Use "auto" for automatic detection.
       --engine ENGINE      Disable auto detection of the simulated engine.
                            Possible options:
-                            rpg2k   - RPG Maker 2000 engine
-                            rpg2k3  - RPG Maker 2003 engine
-                            rpg2k3e - RPG Maker 2003 (English release) engine
+                            rpg2k      - RPG Maker 2000 engine (v1.00 - v1.10)
+                            rpg2kv150  - RPG Maker 2000 engine (v1.50 - v1.51)
+                            rpg2k3     - RPG Maker 2003 engine (v1.00 - v1.04)
+                            rpg2k3v105 - RPG Maker 2003 engine (v1.05 - v1.09a)
+                            rpg2k3e    - RPG Maker 2003 (English release) engine
       --fullscreen         Start in fullscreen mode.
       --show-fps           Enable frames per second counter.
       --hide-title         Hide the title background image and center the
@@ -894,20 +947,28 @@ Alex, EV0001 and the EasyRPG authors wish you a lot of fun!)" << std::endl;
 }
 
 bool Player::IsRPG2k() {
-	return engine == EngineRpg2k;
+	return (engine & EngineRpg2k) == EngineRpg2k;
 }
 
 
 bool Player::IsRPG2k3Legacy() {
-	return engine == EngineRpg2k3;
+	return (engine == EngineRpg2k3 || engine == (EngineRpg2k3 | EngineMajorUpdated));
 }
 
 bool Player::IsRPG2k3() {
 	return (engine & EngineRpg2k3) == EngineRpg2k3;
 }
 
+bool Player::IsMajorUpdatedVersion() {
+	return (engine & EngineMajorUpdated) == EngineMajorUpdated;
+}
+
 bool Player::IsRPG2k3E() {
 	return (engine & EngineRpg2k3E) == EngineRpg2k3E;
+}
+
+bool Player::IsCP932() {
+	return (encoding == "ibm-943_P15A-2003" || encoding == "932");
 }
 
 #if (defined(_WIN32) && defined(NDEBUG) && defined(WINVER) && WINVER >= 0x0600)

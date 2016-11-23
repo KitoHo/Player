@@ -112,6 +112,21 @@ public:
 	bool IsSkillUsable(int skill_id) const override;
 
 	/**
+	 * Returns the modifier by which skill costs are divided.
+	 *
+	 * @return modifier
+	 */
+	int GetSpCostModifier() const;
+
+	/**
+	 * Calculates the Skill costs including all modifiers.
+	 *
+	 * @param skill_id ID of skill to calculate.
+	 * @return needed skill cost.
+	 */
+	int CalculateSkillCost(int skill_id) const override;
+
+	/**
 	 * Gets the actor ID.
 	 *
 	 * @return Actor ID
@@ -342,7 +357,14 @@ public:
 	 * @return true if fixed
 	 */
 	bool IsEquipmentFixed() const;
-
+	
+	/**
+	 * Checks if the actors defense skill is stronger the usual.
+	 * 
+	 * @return true if strong defense
+	 */
+	bool HasStrongDefense() const override;
+	
 	/**
 	 * Sets face graphic of actor.
 	 * @param file_name file containing new face.
@@ -571,7 +593,7 @@ public:
 	 *
 	 * @return true if actor has two weapons.
 	 */
-	bool GetTwoSwordsStyle() const;
+	bool HasTwoWeapons() const;
 
 	/**
 	 * Gets if actor does auto battle.
@@ -677,7 +699,12 @@ public:
 	int GetBattleAnimationId() const override;
 
 	int GetHitChance() const override;
-	int GetCriticalHitChance() const override;
+	float GetCriticalHitChance() const override;
+
+	/**
+	 * Initializes battle related data to there default values.
+	 */
+	virtual void ResetBattle() override;
 
 	BattlerType GetType() const override;
 private:
@@ -686,6 +713,12 @@ private:
 	 * @return Reference to the SaveActor data
 	 */
 	RPG::SaveActor& GetData() const;
+
+	/**
+	 * Removes invalid (wrong type) equipment from the equipment
+	 * slots.
+	 */
+	void RemoveInvalidEquipment();
 
 	int actor_id;
 	std::vector<int> exp_list;

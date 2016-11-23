@@ -37,7 +37,6 @@ Window_BattleCommand::Window_BattleCommand(int x, int y, int width, int height) 
 	cycle = 0;
 
 	SetContents(Bitmap::Create(width - 16, height - 16));
-	contents->SetTransparentColor(windowskin->GetTransparentColor());
 
 	num_rows = contents->GetHeight() / 16;
 
@@ -102,7 +101,7 @@ void Window_BattleCommand::Refresh() {
 	size_t num_commands = commands.size();
 
 	contents->Clear();
-	for (int i = 0; i < num_commands; i++) {
+	for (unsigned int i = 0; i < num_commands; i++) {
 		Font::SystemColor color = disabled[i] ? Font::ColorDisabled : Font::ColorDefault;
 		DrawItem(i, color);
 	}

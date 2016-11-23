@@ -44,6 +44,11 @@
 	#include <stdio.h>
 #endif
 
+#ifdef PSP2
+	#include <stdio.h>
+	#include <psp2/io/stat.h>
+#endif
+
 #if defined(__APPLE__) && defined(__MACH__)
 	#include <SDL.h>
 	#include <unistd.h>
@@ -80,6 +85,24 @@ void Main_Data::Init() {
 			char gekko_dir[256];
 			getcwd(gekko_dir, 255);
 			project_path = std::string(gekko_dir);
+#elif defined(PSP2)
+			// Check if app0 filesystem contains the title id reference file
+			FILE* f = fopen("app0:/titleid.txt","r");
+			if (f == NULL) project_path = "ux0:/data/easyrpg-player";
+			else{
+				char titleID[10];
+				char psp2_dir[256];
+				fread(titleID, 1, 9, f);
+				titleID[9] = 0;
+				sprintf(psp2_dir, "ux0:/data/%s",titleID);
+				fclose(f);
+				project_path = "app0:";
+				save_path = psp2_dir;
+				
+				// Creating saves dir if it doesn't exist
+				sceIoMkdir(psp2_dir, 0777);
+				
+			}
 #elif defined(_3DS)
 #   ifndef CITRA3DS_COMPATIBLE
 			// Check if romFs has some files inside or not
@@ -92,7 +115,6 @@ void Main_Data::Init() {
 
 				if (!Player::is_3dsx) {
 					// Create savepath for CIA - unique for any ID
-					aptOpenSession();
 
 					// Generating save_path
 					u64 titleID;
@@ -101,15 +123,13 @@ void Main_Data::Init() {
 					sprintf(mainDir,"sdmc:/easyrpg-player/%016llX",titleID);
 					
 					// Creating dirs if they don't exist
-					FS_Archive archive = (FS_Archive){ARCHIVE_SDMC, (FS_Path){PATH_EMPTY, 1, (u8*)""}};
-					FSUSER_OpenArchive(&archive);
+					FS_Archive archive;
+					FSUSER_OpenArchive(&archive, ARCHIVE_SDMC, {PATH_EMPTY, 1, (u8*)""});
 					FS_Path filePath=fsMakePath(PATH_ASCII, "/easyrpg-player");
 					FSUSER_CreateDirectory(archive,filePath, FS_ATTRIBUTE_DIRECTORY);
 					FS_Path filePath2=fsMakePath(PATH_ASCII, &mainDir[5]);
 					FSUSER_CreateDirectory(archive,filePath2, FS_ATTRIBUTE_DIRECTORY);
-					FSUSER_CloseArchive(&archive);
-
-					aptCloseSession();
+					FSUSER_CloseArchive(archive);
 					
 					save_path = mainDir;
 				}

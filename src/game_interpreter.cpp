@@ -55,7 +55,6 @@ Game_Interpreter::Game_Interpreter(int _depth, bool _main_flag) {
 	index = 0;
 	updating = false;
 	clear_child = false;
-	runned = false;
 
 	if (depth > 100) {
 		Output::Warning("Too many event calls (over 9000)");
@@ -64,8 +63,8 @@ Game_Interpreter::Game_Interpreter(int _depth, bool _main_flag) {
 	Clear();
 }
 
- Game_Interpreter::~Game_Interpreter() {
- }
+Game_Interpreter::~Game_Interpreter() {
+}
 
 // Clear.
 void Game_Interpreter::Clear() {
@@ -73,10 +72,10 @@ void Game_Interpreter::Clear() {
 	event_id = 0;					// event ID
 	wait_count = 0;					// wait count
 	waiting_battle_anim = false;
-	waiting_pan_screen = false;
 	triggered_by_decision_key = false;
 	continuation = NULL;			// function to execute to resume command
 	button_timer = 0;
+	wait_messages = false;			// wait if message window is visible
 	if (child_interpreter) {		// clear child interpreter for called events
 		if (child_interpreter->updating)
 			clear_child = true;
@@ -133,14 +132,9 @@ void Game_Interpreter::SetContinuation(Game_Interpreter::ContinuationFunction fu
 	continuation = func;
 }
 
-bool Game_Interpreter::HasRunned() const {
-	return runned;
-}
-
 // Update
 void Game_Interpreter::Update() {
 	updating = true;
-	runned = false;
 	// 10000 based on: https://gist.github.com/4406621
 	for (loop_count = 0; loop_count < 10000; ++loop_count) {
 		/* If map is different than event startup time
@@ -172,7 +166,7 @@ void Game_Interpreter::Update() {
 			if (Game_Message::message_waiting)
 				break;
 		} else {
-			if ((Game_Message::visible || Game_Message::message_waiting) && Game_Message::owner_id == event_id)
+			if ((Game_Message::visible || Game_Message::message_waiting) && wait_messages)
 				break;
 		}
 
@@ -223,7 +217,6 @@ void Game_Interpreter::Update() {
 			break;
 		}
 
-		runned = true;
 		if (!ExecuteCommand()) {
 			break;
 		}
@@ -569,6 +562,7 @@ bool Game_Interpreter::CommandShowMessage(RPG::EventCommand const& com) { // cod
 	if (!main_flag && Game_Message::visible)
 		return false;
 
+	wait_messages = true;
 	unsigned int line_count = 0;
 
 	Game_Message::message_waiting = true;
@@ -671,7 +665,7 @@ bool Game_Interpreter::CommandShowChoices(RPG::EventCommand const& com) { // cod
 
 	Game_Message::message_waiting = true;
 	Game_Message::owner_id = event_id;
-
+	wait_messages = true;
 	// Choices setup
 	std::vector<std::string> choices = GetChoices();
 	Game_Message::choice_cancel_type = com.parameters[0];
@@ -697,31 +691,24 @@ bool Game_Interpreter::CommandInputNumber(RPG::EventCommand const& com) { // cod
 }
 
 bool Game_Interpreter::CommandControlSwitches(RPG::EventCommand const& com) { // code 10210
-	int i;
-	switch (com.parameters[0]) {
-		case 0:
-		case 1:
-			// Single and switch range
-			for (i = com.parameters[1]; i <= com.parameters[2]; i++) {
-				if (com.parameters[3] != 2) {
-					Game_Switches[i] = com.parameters[3] == 0;
-				} else {
-					Game_Switches[i] = !Game_Switches[i];
-				}
-			}
-			break;
-		case 2:
-			// Switch from variable
+	if (com.parameters[0] >= 0 && com.parameters[0] <= 2) {
+		// Param0: 0: Single, 1: Range, 2: Indirect
+		// For Range set end to param 2, otherwise to start, this way the loop runs exactly once
+
+		int start = com.parameters[0] == 2 ? Game_Variables[com.parameters[1]] : com.parameters[1];
+		int end = com.parameters[0] == 1 ? com.parameters[2] : start;
+
+		for (int i = start; i <= end; ++i) {
 			if (com.parameters[3] != 2) {
-				Game_Switches[Game_Variables[com.parameters[1]]] = com.parameters[3] == 0;
+				Game_Switches[i] = com.parameters[3] == 0;
 			} else {
-				Game_Switches[Game_Variables[com.parameters[1]]] = !Game_Switches[Game_Variables[com.parameters[1]]];
+				Game_Switches[i] = !Game_Switches[i];
 			}
-			break;
-		default:
-			return false;
+		}
+
+		Game_Map::SetNeedRefresh(Game_Map::Refresh_All);
 	}
-	Game_Map::SetNeedRefresh(Game_Map::Refresh_All);
+
 	return true;
 }
 
@@ -954,91 +941,57 @@ bool Game_Interpreter::CommandControlVariables(RPG::EventCommand const& com) { /
 			;
 	}
 
-	switch (com.parameters[0]) {
-		case 0:
-		case 1:
-			// Single and Var range
-			for (i = com.parameters[1]; i <= com.parameters[2]; i++) {
-				switch (com.parameters[3]) {
-					case 0:
-						// Assignement
-						Game_Variables[i] = value;
-						break;
-					case 1:
-						// Addition
-						Game_Variables[i] += value;
-						break;
-					case 2:
-						// Subtraction
-						Game_Variables[i] -= value;
-						break;
-					case 3:
-						// Multiplication
-						Game_Variables[i] *= value;
-						break;
-					case 4:
-						// Division
-						if (value != 0) {
-							Game_Variables[i] /= value;
-						}
-						break;
-					case 5:
-						// Module
-						if (value != 0) {
-							Game_Variables[i] %= value;
-						} else {
-							Game_Variables[i] = 0;
-						}
-				}
-				if (Game_Variables[i] > MaxSize) {
-					Game_Variables[i] = MaxSize;
-				}
-				if (Game_Variables[i] < MinSize) {
-					Game_Variables[i] = MinSize;
-				}
-			}
-			break;
+	if (com.parameters[0] >= 0 && com.parameters[0] <= 2) {
+		// Param0: 0: Single, 1: Range, 2: Indirect
+		// For Range set end to param 2, otherwise to start, this way the loop runs exactly once
 
-		case 2:
-			int var_index = Game_Variables[com.parameters[1]];
+		int start = com.parameters[0] == 2 ? Game_Variables[com.parameters[1]] : com.parameters[1];
+		int end = com.parameters[0] == 1 ? com.parameters[2] : start;
+
+		for (i = start; i <= end; ++i) {
 			switch (com.parameters[3]) {
 				case 0:
 					// Assignement
-					Game_Variables[var_index] = value;
+					Game_Variables[i] = value;
 					break;
 				case 1:
 					// Addition
-					Game_Variables[var_index] += value;
+					Game_Variables[i] += value;
 					break;
 				case 2:
 					// Subtraction
-					Game_Variables[var_index] -= value;
+					Game_Variables[i] -= value;
 					break;
 				case 3:
 					// Multiplication
-					Game_Variables[var_index] *= value;
+					Game_Variables[i] *= value;
 					break;
 				case 4:
 					// Division
 					if (value != 0) {
-						Game_Variables[var_index] /= value;
+						Game_Variables[i] /= value;
 					}
 					break;
 				case 5:
 					// Module
 					if (value != 0) {
-						Game_Variables[var_index] %= value;
+						Game_Variables[i] %= value;
+					} else {
+						Game_Variables[i] = 0;
 					}
 			}
-			if (Game_Variables[var_index] > MaxSize) {
-				Game_Variables[var_index] = MaxSize;
+
+			if (Game_Variables[i] > MaxSize) {
+				Game_Variables[i] = MaxSize;
 			}
-			if (Game_Variables[var_index] < MinSize) {
-				Game_Variables[var_index] = MinSize;
+			if (Game_Variables[i] < MinSize) {
+				Game_Variables[i] = MinSize;
 			}
+		}
+
+		Game_Map::SetNeedRefresh(Game_Map::Refresh_Map);
 	}
 
-	Game_Map::SetNeedRefresh(Game_Map::Refresh_Map);
 	return true;
 }
 
@@ -1381,6 +1334,7 @@ bool Game_Interpreter::CommandChangeCondition(RPG::EventCommand const& com) { //
 	for (const auto& actor : GetActors(com.parameters[0], com.parameters[1])) {
 		if (remove) {
 			actor->RemoveState(state_id);
+			Game_Battle::SetNeedRefresh(true);
 		} else {
 			if(state_id == 1) {
 				actor->ChangeHp(-actor->GetHp());
@@ -1400,6 +1354,8 @@ bool Game_Interpreter::CommandFullHeal(RPG::EventCommand const& com) { // Code 1
 		actor->SetSp(actor->GetMaxSp());
 		actor->RemoveAllStates();
 	}
+
+	Game_Battle::SetNeedRefresh(true);
 
 	return true;
 }
@@ -1436,13 +1392,22 @@ bool Game_Interpreter::CommandSimulatedAttack(RPG::EventCommand const& com) { //
 }
 
 bool Game_Interpreter::CommandWait(RPG::EventCommand const& com) { // code 11410
+	// Wait a given time
 	if (com.parameters.size() <= 1 ||
 		(com.parameters.size() > 1 && com.parameters[1] == 0)) {
 		SetupWait(com.parameters[0]);
 		return true;
-	} else {
-		return Input::IsAnyTriggered();
 	}
+
+	// Wait until decision key pressed, but skip the first frame so that
+	// it ignores keys that were pressed before this command started.
+	if (!Game_Message::visible && button_timer > 0 && Input::IsTriggered(Input::DECISION)) {
+		button_timer = 0;
+		return true;
+	}
+
+	button_timer++;
+	return false;
 }
 
 bool Game_Interpreter::CommandPlayBGM(RPG::EventCommand const& com) { // code 11510
@@ -1655,6 +1620,10 @@ bool Game_Interpreter::CommandEraseScreen(RPG::EventCommand const& com) { // cod
 	if (Game_Temp::transition_processing || Game_Message::visible)
 		return false;
 
+	if (!main_flag) {
+		Game_Map::SetTeleportDelayed(true);
+	}
+
 	Game_Temp::transition_processing = true;
 	Game_Temp::transition_erase = true;
 
@@ -1732,6 +1701,10 @@ bool Game_Interpreter::CommandEraseScreen(RPG::EventCommand const& com) { // cod
 bool Game_Interpreter::CommandShowScreen(RPG::EventCommand const& com) { // code 11020
 	if (Game_Temp::transition_processing || Game_Message::visible)
 		return false;
+
+	if (!main_flag) {
+		Game_Map::SetTeleportDelayed(true);
+	}
 
 	Game_Temp::transition_processing = true;
 	Game_Temp::transition_erase = false;
@@ -1941,6 +1914,9 @@ bool Game_Interpreter::CommandPlayMemorizedBGM(RPG::EventCommand const& /* com *
 bool Game_Interpreter::CommandKeyInputProc(RPG::EventCommand const& com) { // code 11610
 	int var_id = com.parameters[0];
 	bool wait = com.parameters[1] != 0;
+
+	if (wait && Game_Message::visible)
+		return false;
 
 	// Wait the first frame so that it ignores keys that were pressed before this command started.
 	if (wait && button_timer == 0) {
@@ -2318,7 +2294,7 @@ bool Game_Interpreter::CommandConditionalBranch(RPG::EventCommand const& com) { 
 		switch (com.parameters[1]) {
 		case 0:
 			// Any savestate available
-			result = FileFinder::HasSavegame(*FileFinder::CreateSaveDirectoryTree());
+			result = FileFinder::HasSavegame();
 			break;
 		case 1:
 			// Is Test Play mode?
@@ -2386,8 +2362,13 @@ bool Game_Interpreter::CommandEraseEvent(RPG::EventCommand const& /* com */) { /
 		return true;
 
 	Game_Event* evnt = Game_Map::GetEvent(event_id);
-	if (evnt)
+	if (evnt) {
 		evnt->SetActive(false);
+
+		// Parallel map events shall stop immediately
+		if (!main_flag)
+			return false;
+	}
 
 	return true;
 }
@@ -2540,7 +2521,7 @@ bool Game_Interpreter::CommandChangeBattleCommands(RPG::EventCommand const& com)
 	return true;
 }
 
-bool Game_Interpreter::CommandExitGame(RPG::EventCommand const& com) {
+bool Game_Interpreter::CommandExitGame(RPG::EventCommand const& /* com */) {
 	if (Scene::Find(Scene::GameBrowser)) {
 		Scene::PopUntil(Scene::GameBrowser);
 	} else {
@@ -2549,7 +2530,7 @@ bool Game_Interpreter::CommandExitGame(RPG::EventCommand const& com) {
 	return true;
 }
 
-bool Game_Interpreter::CommandToggleFullscreen(RPG::EventCommand const& com) {
+bool Game_Interpreter::CommandToggleFullscreen(RPG::EventCommand const& /* com */) {
 	DisplayUi->BeginDisplayModeChange();
 	DisplayUi->ToggleFullscreen();
 	DisplayUi->EndDisplayModeChange();

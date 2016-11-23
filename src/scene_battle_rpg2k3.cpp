@@ -322,6 +322,13 @@ void Scene_Battle_Rpg2k3::SetState(Scene_Battle::State new_state) {
 
 	switch (state) {
 	case State_Start:
+		Game_Battle::RefreshEvents([](const RPG::TroopPage& page) {
+			const RPG::TroopPageCondition::Flags& flag = page.condition.flags;
+			return flag.turn || flag.turn_actor || flag.turn_enemy ||
+				   flag.switch_a || flag.switch_b || flag.variable ||
+				   flag.fatigue;
+
+		});
 		break;
 	case State_SelectOption:
 		options_window->SetActive(true);
@@ -529,10 +536,25 @@ bool Scene_Battle_Rpg2k3::ProcessBattleAction(Game_BattleAlgorithm::AlgorithmBas
 		return false;
 	}
 
-	std::vector<Game_Battler*>::const_iterator it;
-
 	switch (battle_action_state) {
 	case BattleActionState_Start:
+		action->TargetFirst();
+
+		if (battle_action_need_event_refresh) {
+			action->GetSource()->NextBattleTurn();
+			NextTurn(action->GetSource());
+			battle_action_need_event_refresh = false;
+
+			// Next turn events must run before the battle animation is played
+			Game_Battle::RefreshEvents([](const RPG::TroopPage& page) {
+				const RPG::TroopPageCondition::Flags& flag = page.condition.flags;
+				return flag.turn || flag.turn_actor || flag.turn_enemy ||
+					   flag.command_actor;
+			});
+
+			return false;
+		}
+
 		ShowNotification(action->GetStartMessage());
 
 		if (!action->IsTargetValid()) {
@@ -555,12 +577,6 @@ bool Scene_Battle_Rpg2k3::ProcessBattleAction(Game_BattleAlgorithm::AlgorithmBas
 
 		action->Execute();
 
-		if (action->GetTarget() && action->GetAnimation()) {
-			Game_Battle::ShowBattleAnimation(
-				action->GetAnimation()->ID,
-				action->GetTarget());
-		}
-
 		if (source_sprite) {
 			source_sprite->Flash(Color(255, 255, 255, 100), 15);
 			source_sprite->SetAnimationState(
@@ -568,7 +584,9 @@ bool Scene_Battle_Rpg2k3::ProcessBattleAction(Game_BattleAlgorithm::AlgorithmBas
 				Sprite_Battler::LoopState_WaitAfterFinish);
 		}
 
-		if (action->IsFirstAttack()) {
+		action->PlayAnimation();
+
+		{
 			std::vector<Game_Battler*> battlers;
 			Main_Data::game_party->GetActiveBattlers(battlers);
 			Main_Data::game_enemyparty->GetActiveBattlers(battlers);
@@ -600,10 +618,6 @@ bool Scene_Battle_Rpg2k3::ProcessBattleAction(Game_BattleAlgorithm::AlgorithmBas
 			if (!action->IsFirstAttack()) {
 				action->Execute();
 			}
-			else {
-				NextTurn(action->GetSource());
-				std::vector<int16_t> states = action->GetSource()->NextBattleTurn();
-			}
 
 			Sprite_Battler* target_sprite = Game_Battle::GetSpriteset().FindBattler(action->GetTarget());
 			if (action->IsSuccess() && !action->IsPositive() && target_sprite) {
@@ -618,7 +632,7 @@ bool Scene_Battle_Rpg2k3::ProcessBattleAction(Game_BattleAlgorithm::AlgorithmBas
 						DrawFloatText(
 							action->GetTarget()->GetBattleX(),
 							action->GetTarget()->GetBattleY(),
-							0,
+							action->IsPositive() ? Font::ColorHeal : Font::ColorDefault,
 							Utils::ToString(action->GetAffectedHp()),
 							30);
 					}
@@ -649,37 +663,50 @@ bool Scene_Battle_Rpg2k3::ProcessBattleAction(Game_BattleAlgorithm::AlgorithmBas
 
 		break;
 	case BattleActionState_Finished:
+		if (battle_action_need_event_refresh) {
+			battle_action_wait = 30;
+			battle_action_need_event_refresh = true;
+
+			// Reset variables
+			battle_action_state = BattleActionState_Start;
+			targets.clear();
+
+			return true;
+		}
+
 		if (battle_action_wait--) {
 			return false;
 		}
-		battle_action_wait = 30;
 
-		for (it = targets.begin(); it != targets.end(); it++) {
-			Sprite_Battler* target_sprite = Game_Battle::GetSpriteset().FindBattler(*it);
+		{
+			std::vector<Game_Battler*>::const_iterator it;
 
-			if ((*it)->IsDead()) {
-				if (action->GetDeathSe()) {
-					Game_System::SePlay(*action->GetDeathSe());
-				}
+			for (it = targets.begin(); it != targets.end(); ++it) {
+				Sprite_Battler* target_sprite = Game_Battle::GetSpriteset().FindBattler(*it);
 
-				if (target_sprite) {
-					target_sprite->SetAnimationState(Sprite_Battler::AnimationState_Dead);
-				}
-			} else {
-				if (target_sprite) {
-					if (!target_sprite->IsIdling()) {
-						// Was revived or some other deadlock situation :/
-						target_sprite->SetAnimationState(Sprite_Battler::AnimationState_Idle, Sprite_Battler::LoopState_DefaultAnimationAfterFinish);
+				if ((*it)->IsDead()) {
+					if (action->GetDeathSe()) {
+						Game_System::SePlay(*action->GetDeathSe());
 					}
+				}
+
+				if (target_sprite) {
+					target_sprite->DetectStateChange();
 				}
 			}
 		}
 
-		// Reset variables
-		battle_action_state = BattleActionState_Start;
-		targets.clear();
+		// Must loop another time otherwise the event update happens during
+		// SelectActor which updates the gauge
+		battle_action_need_event_refresh = true;
 
-		return true;
+		Game_Battle::RefreshEvents([](const RPG::TroopPage& page) {
+			const RPG::TroopPageCondition::Flags& flag = page.condition.flags;
+			return flag.switch_a || flag.switch_b || flag.variable ||
+				   flag.fatigue || flag.actor_hp || flag.enemy_hp;
+		});
+
+		return false;
 	}
 
 	return false;
@@ -903,28 +930,25 @@ bool Scene_Battle_Rpg2k3::CheckWin() {
 		std::vector<int> drops;
 		Main_Data::game_enemyparty->GenerateDrops(drops);
 
-		Game_Message::texts.push_back(Data::terms.victory + "\f");
+		Game_Message::texts.push_back(Data::terms.victory);
 
 		std::string space = Player::IsRPG2k3E() ? " " : "";
 
 		std::stringstream ss;
-		ss << exp << space << Data::terms.exp_received << "\f";
+		ss << exp << space << Data::terms.exp_received;
 		Game_Message::texts.push_back(ss.str());
 		if (money > 0) {
 			ss.str("");
-			ss << Data::terms.gold_recieved_a << " " << money << Data::terms.gold << Data::terms.gold_recieved_b << "\f";
+			ss << Data::terms.gold_recieved_a << " " << money << Data::terms.gold << Data::terms.gold_recieved_b;
 			Game_Message::texts.push_back(ss.str());
 		}
 		for(std::vector<int>::iterator it = drops.begin(); it != drops.end(); ++it) {
 			ss.str("");
-			ss << Data::items[*it - 1].name << space << Data::terms.item_recieved << "\f";
+			ss << Data::items[*it - 1].name << space << Data::terms.item_recieved;
 			Game_Message::texts.push_back(ss.str());
 		}
 
 		message_window->SetHeight(32);
-		Game_Message::SetPositionFixed(true);
-		Game_Message::SetPosition(0);
-		Game_Message::SetTransparent(false);
 		Game_Message::message_waiting = true;
 
 		Game_System::BgmPlay(Game_System::GetSystemBGM(Game_System::BGM_Victory));
@@ -938,6 +962,15 @@ bool Scene_Battle_Rpg2k3::CheckWin() {
 				Game_Actor* actor = static_cast<Game_Actor*>(*it);
 				actor->ChangeExp(actor->GetExp() + exp, true);
 		}
+
+		for (std::string& str : Game_Message::texts) {
+			// FIXME: We really need a more sane API for injecting breaks after each line
+
+			if (!str.empty() && str[str.size() - 1] != '\f') {
+				str += '\f';
+			}
+		}
+
 		Main_Data::game_party->GainGold(money);
 		for (std::vector<int>::iterator it = drops.begin(); it != drops.end(); ++it) {
 			Main_Data::game_party->AddItem(*it, 1);

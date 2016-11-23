@@ -26,7 +26,7 @@
 #  include <config.h>
 #endif
 
-#if !(defined(USE_SDL) || defined(_3DS))
+#if !(defined(USE_SDL) || defined(_3DS) || defined(PSP2))
 #  error "This build doesn't target a backend"
 #endif
 
@@ -42,6 +42,11 @@
  * Smart pointer header.
  */
 #include "memory_management.h"
+
+#ifdef PSP2
+#  define SUPPORT_JOYSTICK
+#  define SUPPORT_JOYSTICK_AXIS
+#endif
 
 #ifdef GEKKO
 #  include "stdint.h"
@@ -60,7 +65,8 @@
 
 #ifdef USE_SDL
 #  define USE_SDL_MIXER
-
+#  define SUPPORT_AUDIO
+#
 #  ifdef PSP
 #    undef USE_SDL_MIXER
 #    define NO_SDL_MIXER
@@ -92,9 +98,9 @@
 #  endif
 
 #  ifdef NO_SDL_MIXER
-#    undef SUPPORT_AUDIO
-#  else
-#    define SUPPORT_AUDIO
+#    if !defined(HAVE_OPENAL)
+#      undef SUPPORT_AUDIO
+#    endif
 #  endif
 
 #  ifdef WANT_FMMIDI
@@ -109,6 +115,10 @@
 #      error "WANT_FMMIDI must be set to 1 for non-SDL builds"
 #    endif
 #  endif
+#endif
+
+#if defined(HAVE_LIBSAMPLERATE) || defined(HAVE_LIBSPEEXDSP)
+#  define USE_AUDIO_RESAMPLER
 #endif
 
 #endif

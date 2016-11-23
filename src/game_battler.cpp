@@ -290,8 +290,7 @@ bool Game_Battler::UseSkill(int skill_id) {
 			}
 		case RPG::Skill::Type_teleport:
 		case RPG::Skill::Type_escape:
-			// ToDo: Show Teleport/Escape target menu
-			break;
+			return true;
 		case RPG::Skill::Type_switch:
 			Game_Switches[skill.switch_id] = true;
 			return true;
@@ -330,7 +329,7 @@ void Game_Battler::AddState(int state_id) {
 	}
 
 	std::vector<int16_t>& states = GetStates();
-	if (state_id - 1 >= states.size()) {
+	if (state_id - 1 >= static_cast<int>(states.size())) {
 		states.resize(state_id);
 	}
 
@@ -343,7 +342,7 @@ void Game_Battler::RemoveState(int state_id) {
 	}
 
 	std::vector<int16_t>& states = GetStates();
-	if (state_id - 1 >= states.size()) {
+	if (state_id - 1 >= static_cast<int>(states.size())) {
 		return;
 	}
 
@@ -440,6 +439,10 @@ void Game_Battler::SetCharged(bool charge) {
 
 bool Game_Battler::IsDefending() const {
 	return defending;
+}
+
+bool Game_Battler::HasStrongDefense() const {
+	return false;
 }
 
 void Game_Battler::SetDefending(bool defend) {

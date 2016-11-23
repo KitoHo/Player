@@ -23,6 +23,7 @@
 
 #ifdef HAVE_SDL_MIXER
 
+#include "audio_secache.h"
 #include "baseui.h"
 #include "audio_sdl.h"
 #include "filefinder.h"
@@ -60,7 +61,7 @@ namespace {
 		int out_len = stream_size;
 		if (cvt.needed) {
 			// Calculate how many data is needed to fill the buffer after converting it
-			double d = out_len / cvt.rate_incr;
+			double d = out_len / cvt.len_ratio;
 			out_len = (int)std::ceil(d);
 			out_len += out_len & 1;
 		}
@@ -108,9 +109,9 @@ namespace {
 		case AudioDecoder::Format::S8:
 			return AUDIO_S8;
 		case AudioDecoder::Format::U16:
-			return AUDIO_U16;
+			return AUDIO_U16SYS;
 		case AudioDecoder::Format::S16:
-			return AUDIO_S16;
+			return AUDIO_S16SYS;
 #if SDL_MIXER_MAJOR_VERSION>1
 		case AudioDecoder::Format::S32:
 			return AUDIO_S32;
@@ -130,9 +131,9 @@ namespace {
 			return AudioDecoder::Format::U8;
 		case AUDIO_S8:
 			return AudioDecoder::Format::S8;
-		case AUDIO_U16:
+		case AUDIO_U16SYS:
 			return AudioDecoder::Format::U16;
-		case AUDIO_S16:
+		case AUDIO_S16SYS:
 			return AudioDecoder::Format::S16;
 #if SDL_MIXER_MAJOR_VERSION>1
 		case AUDIO_S32:
@@ -219,6 +220,9 @@ SdlAudio::SdlAudio() :
 }
 
 SdlAudio::~SdlAudio() {
+	// Must be reset otherwise Player segfaults when SDL is reinitialized (Android)
+	Mix_HookMusic(nullptr, nullptr);
+
 	Mix_CloseAudio();
 }
 
@@ -246,28 +250,22 @@ void SdlAudio::BGM_OnPlayedOnce() {
 }
 
 void SdlAudio::BGM_Play(std::string const& file, int volume, int pitch, int fadein) {
-	bgm_stop = false;
-	played_once = false;
-	std::string const path = FileFinder::FindMusic(file);
-	if (path.empty()) {
-		Output::Debug("Music not found: %s", file.c_str());
-		return;
-	}
-
-	FILE* filehandle = FileFinder::fopenUTF8(path, "rb");
+	FILE* filehandle = FileFinder::fopenUTF8(file, "rb");
 	if (!filehandle) {
 		Output::Warning("Music not readable: %s", file.c_str());
 		return;
 	}
-
-	audio_decoder = AudioDecoder::Create(filehandle, path);
+	audio_decoder = AudioDecoder::Create(filehandle, file);
 	if (audio_decoder) {
-		SetupAudioDecoder(filehandle, path, volume, pitch, fadein);
+		SetupAudioDecoder(filehandle, file, volume, pitch, fadein);
 		return;
 	}
 	fclose(filehandle);
 
-	SDL_RWops *rw = SDL_RWFromFile(path.c_str(), "rb");
+	SDL_RWops *rw = SDL_RWFromFile(file.c_str(), "rb");
+
+	bgm_stop = false;
+	played_once = false;
 
 #if SDL_MIXER_MAJOR_VERSION>1
 	bgm.reset(Mix_LoadMUS_RW(rw, 0), &Mix_FreeMusic);
@@ -286,7 +284,7 @@ void SdlAudio::BGM_Play(std::string const& file, int volume, int pitch, int fade
 #if WANT_FMMIDI == 2
 		// Fallback to FMMIDI when SDL Midi failed
 		char magic[4] = { 0 };
-		filehandle = FileFinder::fopenUTF8(path, "rb");
+		filehandle = FileFinder::fopenUTF8(file, "rb");
 		if (!filehandle) {
 			Output::Warning("Music not readable: %s", file.c_str());
 			return;
@@ -348,18 +346,6 @@ void SdlAudio::SetupAudioDecoder(FILE* handle, const std::string& file, int volu
 		return;
 	}
 	
-	// Detect bad AudioCVT implementations (SDL Wii)
-	static bool broken_test = false;
-	static bool audiocvt_broken = false;
-	if (!broken_test) {
-		broken_test = true;
-		SDL_BuildAudioCVT(&cvt, AUDIO_S16, 2, 44100, AUDIO_S16, 2, 44100 / 2);
-		if (!cvt.needed || cvt.rate_incr == 0.0) {
-			Output::Debug("SDL_AudioCVT implementation is broken. Resampling will not work.");
-			audiocvt_broken = true;
-		}
-	}
-
 	// Can't use BGM_Stop here because it destroys the audio_decoder
 #if SDL_MAJOR_VERSION>1
 	// SDL2_mixer bug, see above
@@ -385,7 +371,7 @@ void SdlAudio::SetupAudioDecoder(FILE* handle, const std::string& file, int volu
 	AudioDecoder::Format audio_format = sdl_format_to_format(sdl_format);
 
 	int target_rate = audio_rate;
-	if (!audiocvt_broken && audio_decoder->GetType() == "midi") {
+	if (audio_decoder->GetType() == "midi") {
 		// FM Midi is very CPU heavy and the difference between 44100 and 22050
 		// is not hearable for MIDI
 		target_rate /= 2;
@@ -399,9 +385,6 @@ void SdlAudio::SetupAudioDecoder(FILE* handle, const std::string& file, int volu
 
 	// Don't care if successful, always build cvt
 	SDL_BuildAudioCVT(&cvt, format_to_sdl_format(device_format), (int)device_channels, device_rate, sdl_format, audio_channels, audio_rate);
-	if (audiocvt_broken) {
-		cvt.needed = false;
-	}
 	
 	audio_decoder->SetFade(0, volume, fadein);
 	audio_decoder->SetPitch(pitch);
@@ -458,7 +441,7 @@ void SdlAudio::BGM_Stop() {
 	Mix_HaltMusic();
 }
 
-bool SdlAudio::BGM_PlayedOnce() {
+bool SdlAudio::BGM_PlayedOnce() const {
 	if (audio_decoder) {
 		return audio_decoder->GetLoopCount() > 0;
 	}
@@ -466,7 +449,11 @@ bool SdlAudio::BGM_PlayedOnce() {
 	return played_once;
 }
 
-unsigned SdlAudio::BGM_GetTicks() {
+bool SdlAudio::BGM_IsPlaying() const {
+	return audio_decoder || !bgm_stop || !bgs_stop;
+}
+
+unsigned SdlAudio::BGM_GetTicks() const {
 	if (audio_decoder) {
 		return audio_decoder->GetTicks();
 	}
@@ -533,13 +520,7 @@ void SdlAudio::BGM_Fade(int fade) {
 }
 
 void SdlAudio::BGS_Play(std::string const& file, int volume, int /* pitch */, int fadein) {
-	std::string const path = FileFinder::FindMusic(file);
-	if (path.empty()) {
-		Output::Debug("Music not found: %s", file.c_str());
-		return;
-	}
-
-	bgs.reset(Mix_LoadWAV(path.c_str()), &Mix_FreeChunk);
+	bgs.reset(Mix_LoadWAV(file.c_str()), &Mix_FreeChunk);
 	if (!bgs) {
 		Output::Warning("Couldn't load %s BGS.\n%s", file.c_str(), Mix_GetError());
 		return;
@@ -587,24 +568,51 @@ void SdlAudio::BGS_Volume(int volume) {
 	Mix_Volume(BGS_CHANNEL_NUM, volume * MIX_MAX_VOLUME / 100);
 }
 
-void SdlAudio::SE_Play(std::string const& file, int volume, int /* pitch */) {
-	std::string const path = FileFinder::FindSound(file);
-	if (path.empty()) {
-		Output::Debug("Sound not found: %s", file.c_str());
-		return;
+void SdlAudio::SE_Play(std::string const& file, int volume, int pitch) {
+	std::unique_ptr<AudioSeCache> cache = AudioSeCache::Create(file);
+	std::shared_ptr<Mix_Chunk> sound;
+	AudioSeRef se_ref = nullptr;
+
+	if (cache) {
+		int audio_rate;
+		Uint16 sdl_format;
+		int audio_channels;
+		if (!Mix_QuerySpec(&audio_rate, &sdl_format, &audio_channels)) {
+			Output::Warning("Couldn't query mixer spec.\n%s", Mix_GetError());
+			return;
+		}
+		AudioDecoder::Format audio_format = sdl_format_to_format(sdl_format);
+
+		// When this fails the resampler is probably not compiled in and output will be garbage, just use SDL
+		if (cache->SetFormat(audio_rate, audio_format, audio_channels)) {
+			cache->SetPitch(pitch);
+
+			se_ref = cache->Decode();
+
+			sound.reset(Mix_QuickLoad_RAW(se_ref->buffer.data(), se_ref->buffer.size()), &Mix_FreeChunk);
+
+			if (!sound) {
+				Output::Warning("Couldn't load %s SE.\n%s", file.c_str(), Mix_GetError());
+			}
+		}
 	}
-	std::shared_ptr<Mix_Chunk> sound(Mix_LoadWAV(path.c_str()), &Mix_FreeChunk);
+
 	if (!sound) {
-		Output::Warning("Couldn't load %s SE.\n%s", file.c_str(), Mix_GetError());
-		return;
+		sound.reset(Mix_LoadWAV(file.c_str()), &Mix_FreeChunk);
+		if (!sound) {
+			Output::Warning("Couldn't load %s SE.\n%s", file.c_str(), Mix_GetError());
+			return;
+		}
 	}
+
 	int channel = Mix_PlayChannel(-1, sound.get(), 0);
 	Mix_Volume(channel, volume * MIX_MAX_VOLUME / 100);
 	if (channel == -1) {
 		Output::Warning("Couldn't play %s SE.\n%s", file.c_str(), Mix_GetError());
 		return;
 	}
-	sounds[channel] = sound;
+	sounds[channel].first = sound;
+	sounds[channel].second = se_ref;
 }
 
 void SdlAudio::SE_Stop() {

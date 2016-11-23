@@ -18,15 +18,17 @@
 // Headers
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include "system.h"
 #include "game_party.h"
 #include "game_actors.h"
 #include "game_map.h"
 #include "game_player.h"
 #include "game_battle.h"
+#include "game_targets.h"
 #include "game_temp.h"
+#include "game_system.h"
 #include "output.h"
-#include "util_macro.h"
 
 static RPG::SaveInventory& data = Main_Data::game_data.inventory;
 
@@ -300,14 +302,11 @@ bool Game_Party::IsSkillUsable(int skill_id, const Game_Actor* target, bool from
 		return false;
 	}
 
-	// TODO: Escape and Teleport Spells need event SetTeleportPlace and
-	// SetEscapePlace first. Not sure if any game uses this...
-	//if (Data::skills[skill_id - 1].type == RPG::Skill::Type_teleport) {
-	//	return is_there_a_teleport_set;
-	//} else if (Data::skills[skill_id - 1].type == RPG::Skill::Type_escape) {
-	//	return is_there_an_escape_set;
-	//} else
-	if (skill.type == RPG::Skill::Type_normal ||
+	if (skill.type == RPG::Skill::Type_escape) {
+		return !Game_Temp::battle_running && Game_System::GetAllowEscape() && Game_Targets::HasEscapeTarget();
+	} else if (skill.type == RPG::Skill::Type_teleport) {
+		return !Game_Temp::battle_running && Game_System::GetAllowTeleport() && Game_Targets::HasTeleportTarget();
+	} else if (skill.type == RPG::Skill::Type_normal ||
 		skill.type >= RPG::Skill::Type_subskill) {
 		int scope = skill.scope;
 
@@ -504,23 +503,26 @@ void Game_Party::UpdateTimers() {
 	}
 }
 
-int Game_Party::GetTimer(int which, bool* visible, bool* battle) {
+int Game_Party::GetTimer(int which) {
 	switch (which) {
 		case Timer1:
-			if (visible) {
-				*visible = data.timer1_visible;
-			}
-			if (battle) {
-				*battle = data.timer1_battle;
-			}
 			return data.timer1_secs;
 		case Timer2:
-			if (visible) {
-				*visible = data.timer2_visible;
-			}
-			if (battle) {
-				*battle = data.timer2_battle;
-			}
+			return data.timer2_secs;
+		default:
+			return 0;
+	}
+}
+
+int Game_Party::GetTimer(int which, bool& visible, bool& battle) {
+	switch (which) {
+		case Timer1:
+			visible = data.timer1_visible;
+			battle = data.timer1_battle;
+			return data.timer1_secs;
+		case Timer2:
+			visible = data.timer2_visible;
+			battle = data.timer2_battle;
 			return data.timer2_secs;
 		default:
 			return 0;
@@ -541,11 +543,10 @@ int Game_Party::GetAverageLevel() {
 		party_lvl += (*it)->GetLevel();
 	}
 
-	return party_lvl /= (int)actors.size();
+	return party_lvl / (int)actors.size();
 }
 
 int Game_Party::GetFatigue() {
-	int party_exh = 0;
 	std::vector<Game_Actor*> actors = GetActors();
 	std::vector<Game_Actor*>::iterator it;
 
@@ -553,11 +554,21 @@ int Game_Party::GetFatigue() {
 		return 0;
 	}
 
-	for (it = actors.begin(); it != actors.end(); ++it) {
-		// FIXME: this is what the help file says, but it looks wrong
-		party_exh += 100 - (200 * (*it)->GetHp() / (*it)->GetMaxHp() -
-			100 * (*it)->GetSp() / (*it)->GetMaxSp() / 3);
+	int hp = 0;
+	int total_hp = 0;
+	int sp = 0;
+	int total_sp = 0; 
+	for (Game_Actor* a : actors) {
+		hp += a->GetHp();
+		total_hp += a->GetMaxHp();
+		sp += a->GetSp();
+		total_sp += a->GetMaxSp();
 	}
 
-	return party_exh /= (int)actors.size();
+	// SP is always 33.3% of fatigue, which means a 0 SP actor is never above 66%
+	if (total_sp == 0) {
+		total_sp = 1;
+	}
+
+	return (int)std::ceil(100 - 100.0f * (((float)hp / total_hp * 2.0f + (float)sp / total_sp) / 3.0f));
 }

@@ -23,10 +23,9 @@
 #include "game_battler.h"
 #include "game_screen.h"
 #include "game_system.h"
+#include "game_variables.h"
 #include "main_data.h"
-#include "options.h"
-#include "sprite_battler.h"
-#include "spriteset_battle.h"
+#include "output.h"
 
 Game_Screen::Game_Screen() :
 	data(Main_Data::game_data.screen)
@@ -87,9 +86,26 @@ void Game_Screen::Reset()
 }
 
 Game_Picture* Game_Screen::GetPicture(int id) {
+	// PicPointer Patch handling
+	if (id > 10000) {
+		// Picture to point at
+		int new_id;
+		if (id > 50000) {
+			new_id = Game_Variables[id - 50000];
+		} else {
+			new_id = Game_Variables[id - 10000];
+		}
+
+		if (new_id > 0) {
+			Output::Debug("PicPointer: ID %d replaced with ID %d", id, new_id);
+			id = new_id;
+		}
+	}
+
 	if (id <= 0) {
 		return NULL;
 	}
+
 	if (id > (int)pictures.size()) {
 		// Some games use more pictures then RPG_RT officially supported
 		Main_Data::game_data.pictures.resize(id);
@@ -204,7 +220,7 @@ void Game_Screen::InitSnowRain() {
 	if (!snowflakes.empty())
 		return;
 
-	static const int num_snowflakes[3] = {100, 200, 300};
+	static const int num_snowflakes[3] = {50, 100, 150};
 
 	for (int i = 0; i < num_snowflakes[data.weather_strength]; i++) {
 		Snowflake f;
@@ -223,9 +239,9 @@ void Game_Screen::UpdateSnowRain(int speed) {
 	for (it = snowflakes.begin(); it != snowflakes.end(); ++it) {
 		Snowflake& f = *it;
 		f.y += (uint8_t)speed;
-		f.life++;
-		if (f.life > snowflake_life)
-			f.life = 0;
+		f.life -= 5;
+		if (f.life < 10)
+			f.life = 255;
 	}
 }
 

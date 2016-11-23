@@ -36,9 +36,11 @@ for some additional binary patches.
 
 *--engine* 'ENGINE'::
   Disable auto detection of the simulated engine. Possible options:
-   - 'rpg2k'   - RPG Maker 2000 engine
-   - 'rpg2k3'  - RPG Maker 2003 engine
-   - 'rpg2k3e' - RPG Maker 2003 (English release) engine
+   - 'rpg2k'      - RPG Maker 2000 engine (v1.00 - v1.10)
+   - 'rpg2kv150'  - RPG Maker 2000 engine (v1.50 - v1.51)
+   - 'rpg2k3'     - RPG Maker 2003 engine (v1.00 - v1.04)
+   - 'rpg2k3v105' - RPG Maker 2003 engine (v1.05 - v1.09a)
+   - 'rpg2k3e'    - RPG Maker 2003 (English release) engine
 
 *--fullscreen*::
   Start in fullscreen mode.
@@ -146,8 +148,8 @@ https://github.com/EasyRPG/Player/issues
 
 
 == COPYRIGHT / AUTHORS
-EasyRPG Player is Copyright (C) 2007-2016 the EasyRPG authors, see file AUTHORS
-for details.
+EasyRPG Player is Copyright (C) 2007-2016 the EasyRPG authors, see file
+AUTHORS.md for details.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU GPL version 3.
@@ -159,5 +161,5 @@ mkxp - An open source RGSS (Ruby Game Scripting System) interface
 implementation that aims to support games created by "RPG Maker XP",
 "RPG Maker VX" and "RPG Maker VX Ace"
 
-For additional information aubout EasyRPG software and related projects there
-is a wiki: https://easy-rpg.org/wiki/
+For additional information about EasyRPG software and related projects there
+is a wiki: https://wiki.easyrpg.org
